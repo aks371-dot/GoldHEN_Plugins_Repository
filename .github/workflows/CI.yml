@@ -32,23 +32,13 @@ jobs:
           git clone --depth 1 https://github.com/GoldHEN/GoldHEN_Plugins_SDK.git $GOLDHEN_SDK
           make -C $GOLDHEN_SDK PRINTF=1 DEBUGFLAGS=1
 
-      - name: Imprimir SDK
-        run: |
-          echo "=== fliprate_remover ==="
-          cat plugin_src/fliprate_remover/source/main.c || echo "no existe fliprate_remover"
-          echo "=== include del SDK ==="
-          ls $GOLDHEN_SDK/include
-          echo "=== GoldHEN.h ==="
-          grep -n -i -E "hook|detour|dlsym" $GOLDHEN_SDK/include/GoldHEN.h | head -60 || true
-          echo "=== VideoOut.h ==="
-          VO=$(find $OO_PS4_TOOLCHAIN -name VideoOut.h | head -1)
-          echo "$VO"
-          grep -n -i -E "BufferAttribute|pixelFormat|tilingMode|RegisterBuffers|SubmitFlip|width|height|pitch" "$VO" | head -60 || true
-
       - name: Escribir main.c
         run: |
           mkdir -p $GITHUB_WORKSPACE/menu
           cat > $GITHUB_WORKSPACE/menu/main.c <<'EOF'
+          #include <Common.h>
+          #include <orbis/VideoOut.h>
+          #include "plugin_common.h"
           #include <stdint.h>
           #include <stddef.h>
 
@@ -56,68 +46,77 @@ jobs:
           #define attr_public __attribute__((visibility("default")))
           #endif
 
-          #define BTN_UP     0x00000010U
-          #define BTN_DOWN   0x00000040U
-          #define BTN_R1     0x00000800U
-          #define BTN_CROSS  0x00004000U
-          #define BTN_CIRCLE 0x00002000U
-          #define BTN_SQUARE 0x00008000U
+          #define FM_BTN_UP     0x00000010U
+          #define FM_BTN_DOWN   0x00000040U
+          #define FM_BTN_R1     0x00000800U
+          #define FM_BTN_CROSS  0x00004000U
+          #define FM_BTN_CIRCLE 0x00002000U
+          #define FM_BTN_SQUARE 0x00008000U
 
-          typedef void *pthread_handle_t;
-
-          int scePthreadCreate(pthread_handle_t *thread, const void *attr, void *(*entry)(void *), void *arg, const char *name);
-          int sceKernelUsleep(unsigned int usec);
-          int sceKernelSendNotificationRequest(int device, void *req, size_t size, int blocking);
-          int sceKernelOpen(const char *path, int flags, int mode);
-          long sceKernelWrite(int fd, const void *buf, size_t n);
-          int sceKernelClose(int fd);
-          int scePadInit(void);
-          int scePadOpen(int userId, int type, int index, const void *param);
-          int scePadGetHandle(int userId, int type, int index);
-          int scePadReadState(int handle, void *data);
-          int sceUserServiceGetInitialUser(int *userId);
+          int fm_thread_create(void **t, const void *attr, void *(*entry)(void *), void *arg, const char *name) __asm__("scePthreadCreate");
+          int fm_usleep(unsigned int us) __asm__("sceKernelUsleep");
+          int fm_send_notif(int dev, void *req, size_t size, int blocking) __asm__("sceKernelSendNotificationRequest");
+          int fm_open(const char *p, int flags, int mode) __asm__("sceKernelOpen");
+          long fm_write(int fd, const void *b, size_t n) __asm__("sceKernelWrite");
+          int fm_close(int fd) __asm__("sceKernelClose");
+          int fm_pad_init(void) __asm__("scePadInit");
+          int fm_pad_open(int user, int type, int idx, const void *p) __asm__("scePadOpen");
+          int fm_pad_get_handle(int user, int type, int idx) __asm__("scePadGetHandle");
+          int fm_pad_read(int h, void *d) __asm__("scePadReadState");
+          int fm_user_initial(int *u) __asm__("sceUserServiceGetInitialUser");
 
           typedef struct {
               char unk[45];
               char msg[3075];
-          } notify_request_t;
+          } fm_notify_req_t;
 
-          static notify_request_t g_req;
+          typedef struct {
+              int32_t pixelFormat;
+              int32_t tilingMode;
+              int32_t aspectRatio;
+              uint32_t width;
+              uint32_t height;
+              uint32_t pitchInPixel;
+              uint32_t option;
+              uint32_t reserved0;
+              uint64_t reserved1;
+          } fm_vo_attr_t;
+
+          #define FM_MAXBUF 16
+          #define FM_NOPT 3
+
+          static fm_notify_req_t g_req;
           static uint8_t g_pad[512] __attribute__((aligned(16)));
-
-          #define NOPT 3
-          static const char *g_names[NOPT] = { "Opcion 1", "Opcion 2", "Opcion 3" };
-          static int g_state[NOPT] = { 0, 0, 0 };
-          static int g_sel = 0;
-          static int g_open = 0;
+          static const char *g_names[FM_NOPT] = { "OPCION 1", "OPCION 2", "OPCION 3" };
+          static int g_state[FM_NOPT] = { 0, 0, 0 };
+          static volatile int g_sel = 0;
+          static volatile int g_open = 0;
           static volatile int g_started = 0;
-          static pthread_handle_t g_thread;
+          static volatile int g_hooked = 0;
+          static void *g_thread;
 
-          static void logs(const char *s) {
-              int fd = sceKernelOpen("/data/FortniteMenu.log", 0x209, 0777);
+          static void *g_bufs[FM_MAXBUF];
+          static volatile int g_nbufs = 0;
+          static volatile int32_t g_handle = -1;
+          static volatile uint32_t g_fmt = 0;
+          static volatile int32_t g_tile = -1;
+          static volatile uint32_t g_w = 0;
+          static volatile uint32_t g_h = 0;
+          static volatile uint32_t g_pitch = 0;
+          static volatile int g_flip_calls = 0;
+          static volatile int g_reg_calls = 0;
+
+          static void fm_log(const char *s) {
+              int fd = fm_open("/data/FortniteMenu.log", 0x209, 0777);
               if (fd < 0) return;
               int n = 0;
               while (s[n]) n++;
-              sceKernelWrite(fd, s, n);
-              sceKernelWrite(fd, "\n", 1);
-              sceKernelClose(fd);
+              fm_write(fd, s, n);
+              fm_write(fd, "\n", 1);
+              fm_close(fd);
           }
 
-          static void logn(const char *label, int v) {
-              char buf[96];
-              int n = 0;
-              while (label[n] && n < 70) { buf[n] = label[n]; n++; }
-              if (v < 0) { buf[n++] = '-'; v = -v; }
-              char tmp[16];
-              int t = 0;
-              if (v == 0) tmp[t++] = '0';
-              while (v > 0 && t < 15) { tmp[t++] = '0' + (v % 10); v /= 10; }
-              while (t > 0) buf[n++] = tmp[--t];
-              buf[n] = 0;
-              logs(buf);
-          }
-
-          static void put(char *dst, int *n, const char *s) {
+          static void fm_put(char *dst, int *n, const char *s) {
               while (*s && *n < 3000) {
                   dst[*n] = *s;
                   (*n)++;
@@ -126,132 +125,323 @@ jobs:
               dst[*n] = 0;
           }
 
-          static void notify(const char *text) {
+          static void fm_put_num(char *dst, int *n, int v) {
+              char tmp[16];
+              int t = 0;
+              if (v < 0) {
+                  if (*n < 3000) dst[(*n)++] = '-';
+                  v = -v;
+              }
+              if (v == 0) tmp[t++] = '0';
+              while (v > 0 && t < 15) {
+                  tmp[t++] = (char)('0' + (v % 10));
+                  v /= 10;
+              }
+              while (t > 0 && *n < 3000) dst[(*n)++] = tmp[--t];
+              dst[*n] = 0;
+          }
+
+          static void fm_put_hex(char *dst, int *n, uint32_t v) {
+              for (int i = 7; i >= 0; i--) {
+                  uint32_t d = (v >> (i * 4)) & 0xF;
+                  if (*n < 3000) dst[(*n)++] = (char)(d < 10 ? '0' + d : 'A' + d - 10);
+              }
+              dst[*n] = 0;
+          }
+
+          static void fm_notify(const char *text) {
               int i = 0;
               while (text[i] && i < 3070) {
                   g_req.msg[i] = text[i];
                   i++;
               }
               g_req.msg[i] = 0;
-              int r = sceKernelSendNotificationRequest(0, &g_req, sizeof(g_req), 0);
-              logn("notify ret=", r);
+              fm_send_notif(0, &g_req, sizeof(g_req), 0);
           }
 
-          static void show_menu(void) {
-              char buf[400];
+          static int fm_is8888(uint32_t f) {
+              return f == 0x80000000U || f == 0x80002200U;
+          }
+
+          static int fm_overlay_ready(void) {
+              return g_flip_calls > 0 && g_nbufs > 0 && g_tile == 1 && fm_is8888(g_fmt);
+          }
+
+          static void fm_show_notification_menu(void) {
+              char buf[600];
               int n = 0;
               buf[0] = 0;
-              put(buf, &n, "MENU FORTNITE\n");
-              for (int i = 0; i < NOPT; i++) {
-                  put(buf, &n, (i == g_sel) ? "> " : "  ");
-                  put(buf, &n, g_names[i]);
-                  put(buf, &n, g_state[i] ? ": ON\n" : ": OFF\n");
+              fm_put(buf, &n, "MENU FORTNITE (aviso)\n");
+              for (int i = 0; i < FM_NOPT; i++) {
+                  fm_put(buf, &n, (i == g_sel) ? "> " : "  ");
+                  fm_put(buf, &n, g_names[i]);
+                  fm_put(buf, &n, g_state[i] ? ": ON\n" : ": OFF\n");
               }
-              put(buf, &n, "X = cambiar | O = cerrar");
-              notify(buf);
+              fm_put(buf, &n, "X = cambiar | O = cerrar\n");
+              fm_put(buf, &n, "DIAG flips=");
+              fm_put_num(buf, &n, g_flip_calls);
+              fm_put(buf, &n, " reg=");
+              fm_put_num(buf, &n, g_reg_calls);
+              fm_put(buf, &n, " bufs=");
+              fm_put_num(buf, &n, g_nbufs);
+              fm_put(buf, &n, "\ntile=");
+              fm_put_num(buf, &n, g_tile);
+              fm_put(buf, &n, " fmt=");
+              fm_put_hex(buf, &n, g_fmt);
+              fm_put(buf, &n, "\nw=");
+              fm_put_num(buf, &n, (int)g_w);
+              fm_put(buf, &n, " h=");
+              fm_put_num(buf, &n, (int)g_h);
+              fm_notify(buf);
           }
 
-          static void *menu_thread(void *arg) {
+          static const char FM_CHARS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:>=-/.";
+          static const uint8_t FM_FONT[][7] = {
+              {0b01110,0b10001,0b10001,0b11111,0b10001,0b10001,0b10001},
+              {0b11110,0b10001,0b10001,0b11110,0b10001,0b10001,0b11110},
+              {0b01110,0b10001,0b10000,0b10000,0b10000,0b10001,0b01110},
+              {0b11110,0b10001,0b10001,0b10001,0b10001,0b10001,0b11110},
+              {0b11111,0b10000,0b10000,0b11110,0b10000,0b10000,0b11111},
+              {0b11111,0b10000,0b10000,0b11110,0b10000,0b10000,0b10000},
+              {0b01110,0b10001,0b10000,0b10111,0b10001,0b10001,0b01111},
+              {0b10001,0b10001,0b10001,0b11111,0b10001,0b10001,0b10001},
+              {0b01110,0b00100,0b00100,0b00100,0b00100,0b00100,0b01110},
+              {0b00111,0b00010,0b00010,0b00010,0b00010,0b10010,0b01100},
+              {0b10001,0b10010,0b10100,0b11000,0b10100,0b10010,0b10001},
+              {0b10000,0b10000,0b10000,0b10000,0b10000,0b10000,0b11111},
+              {0b10001,0b11011,0b10101,0b10101,0b10001,0b10001,0b10001},
+              {0b10001,0b11001,0b10101,0b10011,0b10001,0b10001,0b10001},
+              {0b01110,0b10001,0b10001,0b10001,0b10001,0b10001,0b01110},
+              {0b11110,0b10001,0b10001,0b11110,0b10000,0b10000,0b10000},
+              {0b01110,0b10001,0b10001,0b10001,0b10101,0b10010,0b01101},
+              {0b11110,0b10001,0b10001,0b11110,0b10100,0b10010,0b10001},
+              {0b01111,0b10000,0b10000,0b01110,0b00001,0b00001,0b11110},
+              {0b11111,0b00100,0b00100,0b00100,0b00100,0b00100,0b00100},
+              {0b10001,0b10001,0b10001,0b10001,0b10001,0b10001,0b01110},
+              {0b10001,0b10001,0b10001,0b10001,0b10001,0b01010,0b00100},
+              {0b10001,0b10001,0b10001,0b10101,0b10101,0b11011,0b10001},
+              {0b10001,0b10001,0b01010,0b00100,0b01010,0b10001,0b10001},
+              {0b10001,0b10001,0b01010,0b00100,0b00100,0b00100,0b00100},
+              {0b11111,0b00001,0b00010,0b00100,0b01000,0b10000,0b11111},
+              {0b01110,0b10001,0b10011,0b10101,0b11001,0b10001,0b01110},
+              {0b00100,0b01100,0b00100,0b00100,0b00100,0b00100,0b01110},
+              {0b01110,0b10001,0b00001,0b00010,0b00100,0b01000,0b11111},
+              {0b11110,0b00001,0b00001,0b01110,0b00001,0b00001,0b11110},
+              {0b00010,0b00110,0b01010,0b10010,0b11111,0b00010,0b00010},
+              {0b11111,0b10000,0b11110,0b00001,0b00001,0b10001,0b01110},
+              {0b00110,0b01000,0b10000,0b11110,0b10001,0b10001,0b01110},
+              {0b11111,0b00001,0b00010,0b00100,0b01000,0b01000,0b01000},
+              {0b01110,0b10001,0b10001,0b01110,0b10001,0b10001,0b01110},
+              {0b01110,0b10001,0b10001,0b01111,0b00001,0b00010,0b01100},
+              {0b00000,0b00100,0b00100,0b00000,0b00100,0b00100,0b00000},
+              {0b10000,0b01000,0b00100,0b00010,0b00100,0b01000,0b10000},
+              {0b00000,0b00000,0b11111,0b00000,0b11111,0b00000,0b00000},
+              {0b00000,0b00000,0b00000,0b11111,0b00000,0b00000,0b00000},
+              {0b00001,0b00010,0b00010,0b00100,0b01000,0b01000,0b10000},
+              {0b00000,0b00000,0b00000,0b00000,0b00000,0b00110,0b00110}
+          };
+
+          static uint32_t fm_color(uint32_t r, uint32_t g, uint32_t b) {
+              if (g_fmt == 0x80002200U) return 0xFF000000U | (b << 16) | (g << 8) | r;
+              return 0xFF000000U | (r << 16) | (g << 8) | b;
+          }
+
+          static void fm_rect(uint32_t *buf, int x, int y, int w, int h, uint32_t c) {
+              int bw = (int)g_w, bh = (int)g_h, pitch = (int)g_pitch;
+              for (int j = 0; j < h; j++) {
+                  int yy = y + j;
+                  if (yy < 0 || yy >= bh) continue;
+                  for (int i = 0; i < w; i++) {
+                      int xx = x + i;
+                      if (xx < 0 || xx >= bw) continue;
+                      buf[yy * pitch + xx] = c;
+                  }
+              }
+          }
+
+          static int fm_glyph_index(char c) {
+              if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+              for (int i = 0; FM_CHARS[i]; i++) {
+                  if (FM_CHARS[i] == c) return i;
+              }
+              return -1;
+          }
+
+          static void fm_text(uint32_t *buf, int x, int y, const char *s, int scale, uint32_t c) {
+              for (; *s; s++) {
+                  int gi = fm_glyph_index(*s);
+                  if (gi >= 0) {
+                      for (int row = 0; row < 7; row++) {
+                          uint8_t bits = FM_FONT[gi][row];
+                          for (int col = 0; col < 5; col++) {
+                              if (bits & (1 << (4 - col))) {
+                                  fm_rect(buf, x + col * scale, y + row * scale, scale, scale, c);
+                              }
+                          }
+                      }
+                  }
+                  x += 6 * scale;
+              }
+          }
+
+          static void fm_draw_menu(uint32_t *buf) {
+              const int sc = 3;
+              const int lh = 34;
+              int x0 = 60, y0 = 60;
+              int w = 440, h = lh * (FM_NOPT + 2) + 60;
+              uint32_t white  = fm_color(255, 255, 255);
+              uint32_t redhi  = fm_color(235, 30, 30);
+              uint32_t redbg  = fm_color(45, 0, 0);
+              uint32_t redsel = fm_color(140, 10, 10);
+              uint32_t on     = fm_color(255, 230, 230);
+              uint32_t off    = fm_color(190, 120, 120);
+
+              fm_rect(buf, x0 - 4, y0 - 4, w + 8, h + 8, redhi);
+              fm_rect(buf, x0, y0, w, h, redbg);
+              fm_rect(buf, x0, y0, w, 44, redhi);
+              fm_text(buf, x0 + 20, y0 + 12, "MENU FORTNITE", sc, white);
+
+              for (int i = 0; i < FM_NOPT; i++) {
+                  int y = y0 + 44 + 16 + lh * i;
+                  int selected = (i == g_sel);
+                  if (selected) fm_rect(buf, x0 + 8, y - 6, w - 16, lh - 4, redsel);
+                  fm_text(buf, x0 + 20, y, selected ? ">" : " ", sc, white);
+                  fm_text(buf, x0 + 56, y, g_names[i], sc, white);
+                  fm_text(buf, x0 + 330, y, g_state[i] ? "ON" : "OFF", sc, g_state[i] ? on : off);
+              }
+
+              fm_text(buf, x0 + 20, y0 + h - 34, "X CAMBIAR   O CERRAR", 2, white);
+          }
+
+          HOOK_INIT(sceVideoOutRegisterBuffers);
+          HOOK_INIT(sceVideoOutSubmitFlip);
+
+          int32_t sceVideoOutRegisterBuffers_hook(int32_t handle, int32_t start, void * const *addrs, int32_t num, const OrbisVideoOutBufferAttribute *attr) {
+              const fm_vo_attr_t *a = (const fm_vo_attr_t *)attr;
+              g_reg_calls++;
+              if (a && addrs && num > 0 && start >= 0 && (start + num) <= FM_MAXBUF) {
+                  g_handle = handle;
+                  g_fmt = (uint32_t)a->pixelFormat;
+                  g_tile = a->tilingMode;
+                  g_w = a->width;
+                  g_h = a->height;
+                  g_pitch = a->pitchInPixel;
+                  for (int i = 0; i < num; i++) g_bufs[start + i] = addrs[i];
+                  if ((start + num) > g_nbufs) g_nbufs = start + num;
+              }
+              return HOOK_CONTINUE(sceVideoOutRegisterBuffers, int32_t (*)(int32_t, int32_t, void * const *, int32_t, const OrbisVideoOutBufferAttribute *), handle, start, addrs, num, attr);
+          }
+
+          int32_t sceVideoOutSubmitFlip_hook(int32_t handle, int32_t idx, uint32_t mode, int64_t arg) {
+              g_flip_calls++;
+              if (g_open && handle == g_handle && idx >= 0 && idx < g_nbufs && g_bufs[idx] && g_tile == 1 && fm_is8888(g_fmt)) {
+                  fm_draw_menu((uint32_t *)g_bufs[idx]);
+              }
+              return HOOK_CONTINUE(sceVideoOutSubmitFlip, int32_t (*)(int32_t, int32_t, uint32_t, int64_t), handle, idx, mode, arg);
+          }
+
+          static void *fm_thread(void *arg) {
               (void)arg;
               int userId = 0;
               int handle = -1;
               int tries = 0;
               uint32_t prev = 0;
 
-              logs("hilo: iniciado");
-              sceKernelUsleep(5000000);
-              int ru = sceUserServiceGetInitialUser(&userId);
-              logn("hilo: GetInitialUser ret=", ru);
-              logn("hilo: userId=", userId);
-              int ri = scePadInit();
-              logn("hilo: scePadInit ret=", ri);
+              fm_log("v3 hilo: iniciado");
+              fm_usleep(5000000);
+              fm_user_initial(&userId);
+              fm_pad_init();
 
               while (handle < 0 && tries < 60) {
-                  handle = scePadGetHandle(userId, 0, 0);
-                  if (tries < 3) logn("hilo: GetHandle=", handle);
-                  if (handle < 0) {
-                      handle = scePadOpen(userId, 0, 0, 0);
-                      if (tries < 3) logn("hilo: Open=", handle);
-                  }
+                  handle = fm_pad_get_handle(userId, 0, 0);
+                  if (handle < 0) handle = fm_pad_open(userId, 0, 0, 0);
                   if (handle < 0) {
                       tries++;
-                      sceKernelUsleep(2000000);
+                      fm_usleep(2000000);
                   }
               }
               if (handle < 0) {
-                  logs("hilo: no pude abrir el control");
-                  notify("Menu: no pude leer el control");
+                  fm_log("v3 hilo: no pude abrir el control");
+                  fm_notify("Menu v3: no pude leer el control");
                   return (void *)0;
               }
 
-              logn("hilo: control OK handle=", handle);
-              notify("Menu listo: R1 + Cuadrado");
+              fm_log("v3 hilo: control OK");
+              fm_notify("Menu v3 listo: R1 + Cuadrado");
 
               for (;;) {
-                  if (scePadReadState(handle, g_pad) == 0) {
+                  if (fm_pad_read(handle, g_pad) == 0) {
                       uint32_t b = *(uint32_t *)g_pad;
                       uint32_t pressed = b & ~prev;
-                      uint32_t combo = BTN_R1 | BTN_SQUARE;
+                      uint32_t combo = FM_BTN_R1 | FM_BTN_SQUARE;
 
                       if ((b & combo) == combo && (pressed & combo)) {
                           g_open = !g_open;
-                          logn("combo detectado, abierto=", g_open);
-                          if (g_open) show_menu();
-                          else notify("Menu cerrado");
+                          if (g_open) {
+                              if (!fm_overlay_ready()) fm_show_notification_menu();
+                          } else {
+                              if (!fm_overlay_ready()) fm_notify("Menu cerrado");
+                          }
                       } else if (g_open) {
-                          if (pressed & BTN_UP) {
-                              g_sel = (g_sel + NOPT - 1) % NOPT;
-                              show_menu();
-                          } else if (pressed & BTN_DOWN) {
-                              g_sel = (g_sel + 1) % NOPT;
-                              show_menu();
-                          } else if (pressed & BTN_CROSS) {
+                          if (pressed & FM_BTN_UP) {
+                              g_sel = (g_sel + FM_NOPT - 1) % FM_NOPT;
+                              if (!fm_overlay_ready()) fm_show_notification_menu();
+                          } else if (pressed & FM_BTN_DOWN) {
+                              g_sel = (g_sel + 1) % FM_NOPT;
+                              if (!fm_overlay_ready()) fm_show_notification_menu();
+                          } else if (pressed & FM_BTN_CROSS) {
                               g_state[g_sel] = !g_state[g_sel];
-                              show_menu();
-                          } else if (pressed & BTN_CIRCLE) {
+                              if (!fm_overlay_ready()) fm_show_notification_menu();
+                          } else if (pressed & FM_BTN_CIRCLE) {
                               g_open = 0;
-                              notify("Menu cerrado");
+                              if (!fm_overlay_ready()) fm_notify("Menu cerrado");
                           }
                       }
                       prev = b;
                   }
-                  sceKernelUsleep(16000);
+                  fm_usleep(16000);
               }
               return (void *)0;
           }
 
-          static void start_once(const char *who) {
-              logs(who);
+          static void fm_start_thread_once(const char *who) {
+              fm_log(who);
               if (!g_started) {
                   g_started = 1;
-                  notify("FortniteMenu cargado");
-                  int r = scePthreadCreate(&g_thread, 0, menu_thread, 0, "FortniteMenu");
-                  logn("scePthreadCreate ret=", r);
+                  fm_notify("FortniteMenu v3 cargado");
+                  fm_thread_create(&g_thread, 0, fm_thread, 0, "FortniteMenu");
               }
           }
 
           attr_public const char *g_pluginName = "FortniteMenu";
-          attr_public const char *g_pluginDesc = "Menu R1 + Cuadrado";
+          attr_public const char *g_pluginDesc = "Menu rojo R1 + Cuadrado";
           attr_public const char *g_pluginAuth = "FortniteMenu";
           attr_public uint32_t g_pluginVersion = 0x00000100;
 
           attr_public int32_t plugin_load(int32_t argc, const char *argv[]) {
-              start_once("plugin_load llamado");
+              if (!g_hooked) {
+                  g_hooked = 1;
+                  HOOK32(sceVideoOutRegisterBuffers);
+                  HOOK32(sceVideoOutSubmitFlip);
+              }
+              fm_start_thread_once("v3 plugin_load llamado");
               return 0;
           }
 
           attr_public int32_t plugin_unload(int32_t argc, const char *argv[]) {
-              logs("plugin_unload llamado");
+              UNHOOK(sceVideoOutRegisterBuffers);
+              UNHOOK(sceVideoOutSubmitFlip);
+              fm_log("v3 plugin_unload llamado");
               return 0;
           }
 
           attr_public int32_t module_start(size_t argc, const void *args) {
-              start_once("module_start llamado");
+              fm_start_thread_once("v3 module_start llamado");
               return 0;
           }
 
           attr_public int32_t module_stop(size_t argc, const void *args) {
-              logs("module_stop llamado");
+              fm_log("v3 module_stop llamado");
               return 0;
           }
           EOF
@@ -262,21 +452,11 @@ jobs:
 
           clang -D__FINAL__=1 --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c \
             -D__USE_PRINTF__ -Wall \
-            -isysroot $OO_PS4_TOOLCHAIN -isystem $OO_PS4_TOOLCHAIN/include -I$GOLDHEN_SDK/include \
+            -isysroot $OO_PS4_TOOLCHAIN -isystem $OO_PS4_TOOLCHAIN/include \
+            -I$GOLDHEN_SDK/include -I$GITHUB_WORKSPACE/common \
             -o main.o main.c
 
           ld.lld $GOLDHEN_SDK/build/crtprx.o main.o -o FortniteMenu.elf \
             -m elf_x86_64 -pie --script $OO_PS4_TOOLCHAIN/link.x -e _init --eh-frame-hdr \
             -L$OO_PS4_TOOLCHAIN/lib -L$GOLDHEN_SDK \
-            -lSceLibcInternal -lGoldHEN_Hook -lkernel -lSceSysmodule -lScePad -lSceUserService
-
-          $OO_PS4_TOOLCHAIN/bin/linux/create-fself -in=FortniteMenu.elf -out=FortniteMenu.oelf \
-            --lib=FortniteMenu.prx --paid 0x3800000000000011
-
-          ls -la
-
-      - name: Subir PRX
-        uses: actions/upload-artifact@v4
-        with:
-          name: FortniteMenu
-          path: menu/FortniteMenu.prx
+            -lSceLibcInternal -lSceVideoOut -lGoldHEN_Hook
