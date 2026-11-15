@@ -25,7 +25,6 @@ jobs:
           gh release download -R OpenOrbis/OpenOrbis-PS4-Toolchain --pattern '*.tar.gz'
           tar xzf *.tar.gz -C $GITHUB_WORKSPACE
           chmod +x $OO_PS4_TOOLCHAIN/bin/linux/*
-          ls $OO_PS4_TOOLCHAIN
 
       - name: Descargar y compilar GoldHEN SDK
         run: |
@@ -56,6 +55,9 @@ jobs:
           int scePthreadCreate(pthread_handle_t *thread, const void *attr, void *(*entry)(void *), void *arg, const char *name);
           int sceKernelUsleep(unsigned int usec);
           int sceKernelSendNotificationRequest(int device, void *req, size_t size, int blocking);
+          int sceKernelOpen(const char *path, int flags, int mode);
+          long sceKernelWrite(int fd, const void *buf, size_t n);
+          int sceKernelClose(int fd);
           int scePadInit(void);
           int scePadOpen(int userId, int type, int index, const void *param);
           int scePadGetHandle(int userId, int type, int index);
@@ -78,6 +80,30 @@ jobs:
           static volatile int g_started = 0;
           static pthread_handle_t g_thread;
 
+          static void logs(const char *s) {
+              int fd = sceKernelOpen("/data/FortniteMenu.log", 0x209, 0777);
+              if (fd < 0) return;
+              int n = 0;
+              while (s[n]) n++;
+              sceKernelWrite(fd, s, n);
+              sceKernelWrite(fd, "\n", 1);
+              sceKernelClose(fd);
+          }
+
+          static void logn(const char *label, int v) {
+              char buf[96];
+              int n = 0;
+              while (label[n] && n < 70) { buf[n] = label[n]; n++; }
+              if (v < 0) { buf[n++] = '-'; v = -v; }
+              char tmp[16];
+              int t = 0;
+              if (v == 0) tmp[t++] = '0';
+              while (v > 0 && t < 15) { tmp[t++] = '0' + (v % 10); v /= 10; }
+              while (t > 0) buf[n++] = tmp[--t];
+              buf[n] = 0;
+              logs(buf);
+          }
+
           static void put(char *dst, int *n, const char *s) {
               while (*s && *n < 3000) {
                   dst[*n] = *s;
@@ -94,7 +120,8 @@ jobs:
                   i++;
               }
               g_req.msg[i] = 0;
-              sceKernelSendNotificationRequest(0, &g_req, sizeof(g_req), 0);
+              int r = sceKernelSendNotificationRequest(0, &g_req, sizeof(g_req), 0);
+              logn("notify ret=", r);
           }
 
           static void show_menu(void) {
@@ -118,23 +145,33 @@ jobs:
               int tries = 0;
               uint32_t prev = 0;
 
+              logs("hilo: iniciado");
               sceKernelUsleep(5000000);
-              sceUserServiceGetInitialUser(&userId);
-              scePadInit();
+              int ru = sceUserServiceGetInitialUser(&userId);
+              logn("hilo: GetInitialUser ret=", ru);
+              logn("hilo: userId=", userId);
+              int ri = scePadInit();
+              logn("hilo: scePadInit ret=", ri);
 
               while (handle < 0 && tries < 60) {
                   handle = scePadGetHandle(userId, 0, 0);
-                  if (handle < 0) handle = scePadOpen(userId, 0, 0, 0);
+                  if (tries < 3) logn("hilo: GetHandle=", handle);
+                  if (handle < 0) {
+                      handle = scePadOpen(userId, 0, 0, 0);
+                      if (tries < 3) logn("hilo: Open=", handle);
+                  }
                   if (handle < 0) {
                       tries++;
                       sceKernelUsleep(2000000);
                   }
               }
               if (handle < 0) {
+                  logs("hilo: no pude abrir el control");
                   notify("Menu: no pude leer el control");
                   return (void *)0;
               }
 
+              logn("hilo: control OK handle=", handle);
               notify("Menu listo: R1 + Cuadrado");
 
               for (;;) {
@@ -145,6 +182,7 @@ jobs:
 
                       if ((b & combo) == combo && (pressed & combo)) {
                           g_open = !g_open;
+                          logn("combo detectado, abierto=", g_open);
                           if (g_open) show_menu();
                           else notify("Menu cerrado");
                       } else if (g_open) {
@@ -169,10 +207,13 @@ jobs:
               return (void *)0;
           }
 
-          static void start_once(void) {
+          static void start_once(const char *who) {
+              logs(who);
               if (!g_started) {
                   g_started = 1;
-                  scePthreadCreate(&g_thread, 0, menu_thread, 0, "FortniteMenu");
+                  notify("FortniteMenu cargado");
+                  int r = scePthreadCreate(&g_thread, 0, menu_thread, 0, "FortniteMenu");
+                  logn("scePthreadCreate ret=", r);
               }
           }
 
@@ -182,20 +223,22 @@ jobs:
           attr_public uint32_t g_pluginVersion = 0x00000100;
 
           attr_public int32_t plugin_load(int32_t argc, const char *argv[]) {
-              start_once();
+              start_once("plugin_load llamado");
               return 0;
           }
 
           attr_public int32_t plugin_unload(int32_t argc, const char *argv[]) {
+              logs("plugin_unload llamado");
               return 0;
           }
 
           attr_public int32_t module_start(size_t argc, const void *args) {
-              start_once();
+              start_once("module_start llamado");
               return 0;
           }
 
           attr_public int32_t module_stop(size_t argc, const void *args) {
+              logs("module_stop llamado");
               return 0;
           }
           EOF
