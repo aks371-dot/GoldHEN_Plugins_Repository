@@ -22,6 +22,12 @@ jobs:
           tar xzf *.tar.gz -C $GITHUB_WORKSPACE
           ls $GITHUB_WORKSPACE/OpenOrbis/PS4Toolchain
 
+      - name: Descargar GoldHEN SDK
+        run: |
+          rm -rf $GITHUB_WORKSPACE/SDK
+          git clone --depth 1 https://github.com/GoldHEN/GoldHEN_Plugins_SDK.git $GITHUB_WORKSPACE/SDK
+          ls $GITHUB_WORKSPACE/SDK
+
       - name: Compilar
         run: |
           export OO_PS4_TOOLCHAIN=$GITHUB_WORKSPACE/OpenOrbis/PS4Toolchain
