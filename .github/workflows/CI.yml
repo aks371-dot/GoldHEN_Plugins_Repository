@@ -4,6 +4,9 @@ on: [push, workflow_dispatch]
 jobs:
   build_prx:
     runs-on: ubuntu-latest
+    env:
+      OO_PS4_TOOLCHAIN: ${{ github.workspace }}/OpenOrbis/PS4Toolchain
+      GOLDHEN_SDK: ${{ github.workspace }}/SDK
     steps:
       - uses: actions/checkout@v4
 
@@ -21,13 +24,14 @@ jobs:
           cd /tmp/dl
           gh release download -R OpenOrbis/OpenOrbis-PS4-Toolchain --pattern '*.tar.gz'
           tar xzf *.tar.gz -C $GITHUB_WORKSPACE
+          chmod +x $OO_PS4_TOOLCHAIN/bin/linux/*
+          ls $OO_PS4_TOOLCHAIN
 
       - name: Descargar y compilar GoldHEN SDK
         run: |
-          export OO_PS4_TOOLCHAIN=$GITHUB_WORKSPACE/OpenOrbis/PS4Toolchain
-          rm -rf $GITHUB_WORKSPACE/SDK
-          git clone --depth 1 https://github.com/GoldHEN/GoldHEN_Plugins_SDK.git $GITHUB_WORKSPACE/SDK
-          make -C $GITHUB_WORKSPACE/SDK PRINTF=1 DEBUGFLAGS=1
+          rm -rf $GOLDHEN_SDK
+          git clone --depth 1 https://github.com/GoldHEN/GoldHEN_Plugins_SDK.git $GOLDHEN_SDK
+          make -C $GOLDHEN_SDK PRINTF=1 DEBUGFLAGS=1
 
       - name: Escribir main.c
         run: |
@@ -198,22 +202,19 @@ jobs:
 
       - name: Compilar plugin
         run: |
-          OO=$GITHUB_WORKSPACE/OpenOrbis/PS4Toolchain
-          SDK=$GITHUB_WORKSPACE/SDK
           cd $GITHUB_WORKSPACE/menu
-          chmod +x $OO/bin/linux/create-fself
 
           clang -D__FINAL__=1 --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c \
             -D__USE_PRINTF__ -Wall \
-            -isysroot $OO -isystem $OO/include -I$SDK/include \
+            -isysroot $OO_PS4_TOOLCHAIN -isystem $OO_PS4_TOOLCHAIN/include -I$GOLDHEN_SDK/include \
             -o main.o main.c
 
-          ld.lld $SDK/build/crtprx.o main.o -o FortniteMenu.elf \
-            -m elf_x86_64 -pie --script $OO/link.x -e _init --eh-frame-hdr \
-            -L$OO/lib -L$SDK \
+          ld.lld $GOLDHEN_SDK/build/crtprx.o main.o -o FortniteMenu.elf \
+            -m elf_x86_64 -pie --script $OO_PS4_TOOLCHAIN/link.x -e _init --eh-frame-hdr \
+            -L$OO_PS4_TOOLCHAIN/lib -L$GOLDHEN_SDK \
             -lSceLibcInternal -lGoldHEN_Hook -lkernel -lSceSysmodule -lScePad -lSceUserService
 
-          $OO/bin/linux/create-fself -in=FortniteMenu.elf -out=FortniteMenu.oelf \
+          $OO_PS4_TOOLCHAIN/bin/linux/create-fself -in=FortniteMenu.elf -out=FortniteMenu.oelf \
             --lib=FortniteMenu.prx --paid 0x3800000000000011
 
           ls -la
