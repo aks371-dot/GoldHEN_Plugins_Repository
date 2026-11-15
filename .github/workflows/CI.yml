@@ -22,22 +22,17 @@ jobs:
           gh release download -R OpenOrbis/OpenOrbis-PS4-Toolchain --pattern '*.tar.gz'
           tar xzf *.tar.gz -C $GITHUB_WORKSPACE
 
-      - name: Descargar GoldHEN SDK
+      - name: Descargar y compilar GoldHEN SDK
         run: |
+          export OO_PS4_TOOLCHAIN=$GITHUB_WORKSPACE/OpenOrbis/PS4Toolchain
           rm -rf $GITHUB_WORKSPACE/SDK
           git clone --depth 1 https://github.com/GoldHEN/GoldHEN_Plugins_SDK.git $GITHUB_WORKSPACE/SDK
-
-      - name: Dejar solo plugin_template
-        run: |
-          cd plugin_src
-          for d in */; do
-            if [ "$d" != "plugin_template/" ]; then rm -rf "$d"; fi
-          done
-          ls
+          make -C $GITHUB_WORKSPACE/SDK PRINTF=1 DEBUGFLAGS=1
 
       - name: Escribir main.c
         run: |
-          cat > plugin_src/plugin_template/source/main.c <<'EOF'
+          mkdir -p $GITHUB_WORKSPACE/menu
+          cat > $GITHUB_WORKSPACE/menu/main.c <<'EOF'
           #include <stdint.h>
           #include <stddef.h>
 
@@ -45,14 +40,48 @@ jobs:
           #define attr_public __attribute__((visibility("default")))
           #endif
 
+          #define BTN_UP     0x00000010U
+          #define BTN_DOWN   0x00000040U
+          #define BTN_R1     0x00000800U
+          #define BTN_CROSS  0x00004000U
+          #define BTN_CIRCLE 0x00002000U
+          #define BTN_SQUARE 0x00008000U
+
+          typedef void *pthread_handle_t;
+
+          int scePthreadCreate(pthread_handle_t *thread, const void *attr, void *(*entry)(void *), void *arg, const char *name);
+          int sceKernelUsleep(unsigned int usec);
+          int sceKernelSendNotificationRequest(int device, void *req, size_t size, int blocking);
+          int scePadInit(void);
+          int scePadOpen(int userId, int type, int index, const void *param);
+          int scePadGetHandle(int userId, int type, int index);
+          int scePadReadState(int handle, void *data);
+          int sceUserServiceGetInitialUser(int *userId);
+
           typedef struct {
               char unk[45];
               char msg[3075];
           } notify_request_t;
 
-          int sceKernelSendNotificationRequest(int device, notify_request_t *req, size_t size, int blocking);
-
           static notify_request_t g_req;
+          static uint8_t g_pad[512] __attribute__((aligned(16)));
+
+          #define NOPT 3
+          static const char *g_names[NOPT] = { "Opcion 1", "Opcion 2", "Opcion 3" };
+          static int g_state[NOPT] = { 0, 0, 0 };
+          static int g_sel = 0;
+          static int g_open = 0;
+          static volatile int g_started = 0;
+          static pthread_handle_t g_thread;
+
+          static void put(char *dst, int *n, const char *s) {
+              while (*s && *n < 3000) {
+                  dst[*n] = *s;
+                  (*n)++;
+                  s++;
+              }
+              dst[*n] = 0;
+          }
 
           static void notify(const char *text) {
               int i = 0;
@@ -64,13 +93,92 @@ jobs:
               sceKernelSendNotificationRequest(0, &g_req, sizeof(g_req), 0);
           }
 
+          static void show_menu(void) {
+              char buf[400];
+              int n = 0;
+              buf[0] = 0;
+              put(buf, &n, "MENU FORTNITE\n");
+              for (int i = 0; i < NOPT; i++) {
+                  put(buf, &n, (i == g_sel) ? "> " : "  ");
+                  put(buf, &n, g_names[i]);
+                  put(buf, &n, g_state[i] ? ": ON\n" : ": OFF\n");
+              }
+              put(buf, &n, "X = cambiar | O = cerrar");
+              notify(buf);
+          }
+
+          static void *menu_thread(void *arg) {
+              (void)arg;
+              int userId = 0;
+              int handle = -1;
+              int tries = 0;
+              uint32_t prev = 0;
+
+              sceKernelUsleep(5000000);
+              sceUserServiceGetInitialUser(&userId);
+              scePadInit();
+
+              while (handle < 0 && tries < 60) {
+                  handle = scePadGetHandle(userId, 0, 0);
+                  if (handle < 0) handle = scePadOpen(userId, 0, 0, 0);
+                  if (handle < 0) {
+                      tries++;
+                      sceKernelUsleep(2000000);
+                  }
+              }
+              if (handle < 0) {
+                  notify("Menu: no pude leer el control");
+                  return (void *)0;
+              }
+
+              notify("Menu listo: R1 + Cuadrado");
+
+              for (;;) {
+                  if (scePadReadState(handle, g_pad) == 0) {
+                      uint32_t b = *(uint32_t *)g_pad;
+                      uint32_t pressed = b & ~prev;
+                      uint32_t combo = BTN_R1 | BTN_SQUARE;
+
+                      if ((b & combo) == combo && (pressed & combo)) {
+                          g_open = !g_open;
+                          if (g_open) show_menu();
+                          else notify("Menu cerrado");
+                      } else if (g_open) {
+                          if (pressed & BTN_UP) {
+                              g_sel = (g_sel + NOPT - 1) % NOPT;
+                              show_menu();
+                          } else if (pressed & BTN_DOWN) {
+                              g_sel = (g_sel + 1) % NOPT;
+                              show_menu();
+                          } else if (pressed & BTN_CROSS) {
+                              g_state[g_sel] = !g_state[g_sel];
+                              show_menu();
+                          } else if (pressed & BTN_CIRCLE) {
+                              g_open = 0;
+                              notify("Menu cerrado");
+                          }
+                      }
+                      prev = b;
+                  }
+                  sceKernelUsleep(16000);
+              }
+              return (void *)0;
+          }
+
+          static void start_once(void) {
+              if (!g_started) {
+                  g_started = 1;
+                  scePthreadCreate(&g_thread, 0, menu_thread, 0, "FortniteMenu");
+              }
+          }
+
           attr_public const char *g_pluginName = "FortniteMenu";
-          attr_public const char *g_pluginDesc = "Menu de prueba";
+          attr_public const char *g_pluginDesc = "Menu R1 + Cuadrado";
           attr_public const char *g_pluginAuth = "FortniteMenu";
           attr_public uint32_t g_pluginVersion = 0x00000100;
 
           attr_public int32_t plugin_load(int32_t argc, const char *argv[]) {
-              notify("FortniteMenu cargado");
+              start_once();
               return 0;
           }
 
@@ -79,7 +187,7 @@ jobs:
           }
 
           attr_public int32_t module_start(size_t argc, const void *args) {
-              notify("FortniteMenu cargado");
+              start_once();
               return 0;
           }
 
@@ -87,17 +195,31 @@ jobs:
               return 0;
           }
           EOF
-          cat plugin_src/plugin_template/source/main.c
 
-      - name: Compilar
+      - name: Compilar plugin
         run: |
-          export OO_PS4_TOOLCHAIN=$GITHUB_WORKSPACE/OpenOrbis/PS4Toolchain
-          export GOLDHEN_SDK=$GITHUB_WORKSPACE/SDK
-          chmod +x $OO_PS4_TOOLCHAIN/bin/linux/create-fself
-          make
+          OO=$GITHUB_WORKSPACE/OpenOrbis/PS4Toolchain
+          SDK=$GITHUB_WORKSPACE/SDK
+          cd $GITHUB_WORKSPACE/menu
+          chmod +x $OO/bin/linux/create-fself
 
-      - name: Subir plugins
+          clang -D__FINAL__=1 --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c \
+            -D__USE_PRINTF__ -Wall \
+            -isysroot $OO -isystem $OO/include -I$SDK/include \
+            -o main.o main.c
+
+          ld.lld $SDK/build/crtprx.o main.o -o FortniteMenu.elf \
+            -m elf_x86_64 -pie --script $OO/link.x -e _init --eh-frame-hdr \
+            -L$OO/lib -L$SDK \
+            -lSceLibcInternal -lGoldHEN_Hook -lkernel -lSceSysmodule -lScePad -lSceUserService
+
+          $OO/bin/linux/create-fself -in=FortniteMenu.elf -out=FortniteMenu.oelf \
+            --lib=FortniteMenu.prx --paid 0x3800000000000011
+
+          ls -la
+
+      - name: Subir PRX
         uses: actions/upload-artifact@v4
         with:
-          name: plugins
-          path: bin/plugins/prx_final/
+          name: FortniteMenu
+          path: menu/FortniteMenu.prx
