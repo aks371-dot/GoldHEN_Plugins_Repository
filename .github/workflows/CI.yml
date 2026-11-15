@@ -1,8 +1,5 @@
-name: Build modules
+name: Build Fortnite Menu PRX
 on: [push, workflow_dispatch]
-
-permissions:
-  contents: write
 
 jobs:
   build_prx:
@@ -26,8 +23,12 @@ jobs:
           mkdir -p /tmp/dl
           cd /tmp/dl
           gh release download -R OpenOrbis/OpenOrbis-PS4-Toolchain --pattern '*.tar.gz'
-          tar xzf *.tar.gz -C $GITHUB_WORKSPACE
-          chmod +x $OO_PS4_TOOLCHAIN/bin/linux/*
+          mkdir -p $GITHUB_WORKSPACE/OpenOrbis
+          tar xzf *.tar.gz -C $GITHUB_WORKSPACE/OpenOrbis
+          if [ -d "$GITHUB_WORKSPACE/OpenOrbis/OpenOrbis-PS4-Toolchain" ]; then
+            mv "$GITHUB_WORKSPACE/OpenOrbis/OpenOrbis-PS4-Toolchain" "$GITHUB_WORKSPACE/OpenOrbis/PS4Toolchain"
+          fi
+          chmod +x $OO_PS4_TOOLCHAIN/bin/linux/* || true
 
       - name: Descargar y compilar GoldHEN SDK
         run: |
@@ -38,7 +39,7 @@ jobs:
       - name: Escribir main.c
         run: |
           mkdir -p $GITHUB_WORKSPACE/menu
-          cat > $GITHUB_WORKSPACE/menu/main.c <<'EOF'
+          cat << 'EOF' > $GITHUB_WORKSPACE/menu/main.c
           #include <Common.h>
           #include <orbis/VideoOut.h>
           #include <stdint.h>
@@ -119,26 +120,15 @@ jobs:
           }
 
           static void fm_put(char *dst, int *n, const char *s) {
-              while (*s && *n < 3000) {
-                  dst[*n] = *s;
-                  (*n)++;
-                  s++;
-              }
+              while (*s && *n < 3000) { dst[*n] = *s; (*n)++; s++; }
               dst[*n] = 0;
           }
 
           static void fm_put_num(char *dst, int *n, int v) {
-              char tmp[16];
-              int t = 0;
-              if (v < 0) {
-                  if (*n < 3000) dst[(*n)++] = '-';
-                  v = -v;
-              }
+              char tmp[16]; int t = 0;
+              if (v < 0) { if (*n < 3000) dst[(*n)++] = '-'; v = -v; }
               if (v == 0) tmp[t++] = '0';
-              while (v > 0 && t < 15) {
-                  tmp[t++] = (char)('0' + (v % 10));
-                  v /= 10;
-              }
+              while (v > 0 && t < 15) { tmp[t++] = (char)('0' + (v % 10)); v /= 10; }
               while (t > 0 && *n < 3000) dst[(*n)++] = tmp[--t];
               dst[*n] = 0;
           }
@@ -153,26 +143,16 @@ jobs:
 
           static void fm_notify(const char *text) {
               int i = 0;
-              while (text[i] && i < 3070) {
-                  g_req.msg[i] = text[i];
-                  i++;
-              }
+              while (text[i] && i < 3070) { g_req.msg[i] = text[i]; i++; }
               g_req.msg[i] = 0;
               fm_send_notif(0, &g_req, sizeof(g_req), 0);
           }
 
-          static int fm_is8888(uint32_t f) {
-              return f == 0x80000000U || f == 0x80002200U;
-          }
-
-          static int fm_overlay_ready(void) {
-              return g_flip_calls > 0 && g_nbufs > 0 && g_tile == 1 && fm_is8888(g_fmt);
-          }
+          static int fm_is8888(uint32_t f) { return f == 0x80000000U || f == 0x80002200U; }
+          static int fm_overlay_ready(void) { return g_flip_calls > 0 && g_nbufs > 0 && g_tile == 1 && fm_is8888(g_fmt); }
 
           static void fm_show_notification_menu(void) {
-              char buf[600];
-              int n = 0;
-              buf[0] = 0;
+              char buf[600]; int n = 0; buf[0] = 0;
               fm_put(buf, &n, "MENU FORTNITE (aviso)\n");
               for (int i = 0; i < FM_NOPT; i++) {
                   fm_put(buf, &n, (i == g_sel) ? "> " : "  ");
@@ -180,20 +160,13 @@ jobs:
                   fm_put(buf, &n, g_state[i] ? ": ON\n" : ": OFF\n");
               }
               fm_put(buf, &n, "X = cambiar | O = cerrar\n");
-              fm_put(buf, &n, "DIAG flips=");
-              fm_put_num(buf, &n, g_flip_calls);
-              fm_put(buf, &n, " reg=");
-              fm_put_num(buf, &n, g_reg_calls);
-              fm_put(buf, &n, " bufs=");
-              fm_put_num(buf, &n, g_nbufs);
-              fm_put(buf, &n, "\ntile=");
-              fm_put_num(buf, &n, g_tile);
-              fm_put(buf, &n, " fmt=");
-              fm_put_hex(buf, &n, g_fmt);
-              fm_put(buf, &n, "\nw=");
-              fm_put_num(buf, &n, (int)g_w);
-              fm_put(buf, &n, " h=");
-              fm_put_num(buf, &n, (int)g_h);
+              fm_put(buf, &n, "DIAG flips="); fm_put_num(buf, &n, g_flip_calls);
+              fm_put(buf, &n, " reg="); fm_put_num(buf, &n, g_reg_calls);
+              fm_put(buf, &n, " bufs="); fm_put_num(buf, &n, g_nbufs);
+              fm_put(buf, &n, "\ntile="); fm_put_num(buf, &n, g_tile);
+              fm_put(buf, &n, " fmt="); fm_put_hex(buf, &n, g_fmt);
+              fm_put(buf, &n, "\nw="); fm_put_num(buf, &n, (int)g_w);
+              fm_put(buf, &n, " h="); fm_put_num(buf, &n, (int)g_h);
               fm_notify(buf);
           }
 
@@ -263,9 +236,7 @@ jobs:
 
           static int fm_glyph_index(char c) {
               if (c >= 'a' && c <= 'z') c = (char)(c - 32);
-              for (int i = 0; FM_CHARS[i]; i++) {
-                  if (FM_CHARS[i] == c) return i;
-              }
+              for (int i = 0; FM_CHARS[i]; i++) if (FM_CHARS[i] == c) return i;
               return -1;
           }
 
@@ -276,9 +247,7 @@ jobs:
                       for (int row = 0; row < 7; row++) {
                           uint8_t bits = FM_FONT[gi][row];
                           for (int col = 0; col < 5; col++) {
-                              if (bits & (1 << (4 - col))) {
-                                  fm_rect(buf, x + col * scale, y + row * scale, scale, scale, c);
-                              }
+                              if (bits & (1 << (4 - col))) fm_rect(buf, x + col * scale, y + row * scale, scale, scale, c);
                           }
                       }
                   }
@@ -287,16 +256,11 @@ jobs:
           }
 
           static void fm_draw_menu(uint32_t *buf) {
-              const int sc = 3;
-              const int lh = 34;
-              int x0 = 60, y0 = 60;
+              const int sc = 3; const int lh = 34; int x0 = 60, y0 = 60;
               int w = 440, h = lh * (FM_NOPT + 2) + 60;
-              uint32_t white  = fm_color(255, 255, 255);
-              uint32_t redhi  = fm_color(235, 30, 30);
-              uint32_t redbg  = fm_color(45, 0, 0);
-              uint32_t redsel = fm_color(140, 10, 10);
-              uint32_t on     = fm_color(255, 230, 230);
-              uint32_t off    = fm_color(190, 120, 120);
+              uint32_t white = fm_color(255, 255, 255), redhi = fm_color(235, 30, 30);
+              uint32_t redbg = fm_color(45, 0, 0), redsel = fm_color(140, 10, 10);
+              uint32_t on = fm_color(255, 230, 230), off = fm_color(190, 120, 120);
 
               fm_rect(buf, x0 - 4, y0 - 4, w + 8, h + 8, redhi);
               fm_rect(buf, x0, y0, w, h, redbg);
@@ -311,7 +275,6 @@ jobs:
                   fm_text(buf, x0 + 56, y, g_names[i], sc, white);
                   fm_text(buf, x0 + 330, y, g_state[i] ? "ON" : "OFF", sc, g_state[i] ? on : off);
               }
-
               fm_text(buf, x0 + 20, y0 + h - 34, "X CAMBIAR   O CERRAR", 2, white);
           }
 
@@ -322,12 +285,8 @@ jobs:
               const fm_vo_attr_t *a = (const fm_vo_attr_t *)attr;
               g_reg_calls++;
               if (a && addrs && num > 0 && start >= 0 && (start + num) <= FM_MAXBUF) {
-                  g_handle = handle;
-                  g_fmt = (uint32_t)a->pixelFormat;
-                  g_tile = a->tilingMode;
-                  g_w = a->width;
-                  g_h = a->height;
-                  g_pitch = a->pitchInPixel;
+                  g_handle = handle; g_fmt = (uint32_t)a->pixelFormat; g_tile = a->tilingMode;
+                  g_w = a->width; g_h = a->height; g_pitch = a->pitchInPixel;
                   for (int i = 0; i < num; i++) g_bufs[start + i] = addrs[i];
                   if ((start + num) > g_nbufs) g_nbufs = start + num;
               }
@@ -343,61 +302,27 @@ jobs:
           }
 
           static void *fm_thread(void *arg) {
-              (void)arg;
-              int userId = 0;
-              int handle = -1;
-              int tries = 0;
-              uint32_t prev = 0;
-
-              fm_log("v3 hilo: iniciado");
-              fm_usleep(5000000);
-              fm_user_initial(&userId);
-              fm_pad_init();
-
+              (void)arg; int userId = 0, handle = -1, tries = 0; uint32_t prev = 0;
+              fm_log("v3 hilo: iniciado"); fm_usleep(5000000);
+              fm_user_initial(&userId); fm_pad_init();
               while (handle < 0 && tries < 60) {
                   handle = fm_pad_get_handle(userId, 0, 0);
                   if (handle < 0) handle = fm_pad_open(userId, 0, 0, 0);
-                  if (handle < 0) {
-                      tries++;
-                      fm_usleep(2000000);
-                  }
+                  if (handle < 0) { tries++; fm_usleep(2000000); }
               }
-              if (handle < 0) {
-                  fm_log("v3 hilo: no pude abrir el control");
-                  fm_notify("Menu v3: no pude leer el control");
-                  return (void *)0;
-              }
-
-              fm_log("v3 hilo: control OK");
-              fm_notify("Menu v3 listo: R1 + Cuadrado");
-
+              if (handle < 0) { fm_log("v3 hilo: no pude abrir el control"); return (void *)0; }
+              fm_log("v3 hilo: control OK"); fm_notify("Menu v3 listo: R1 + Cuadrado");
               for (;;) {
                   if (fm_pad_read(handle, g_pad) == 0) {
-                      uint32_t b = *(uint32_t *)g_pad;
-                      uint32_t pressed = b & ~prev;
-                      uint32_t combo = FM_BTN_R1 | FM_BTN_SQUARE;
-
+                      uint32_t b = *(uint32_t *)g_pad; uint32_t pressed = b & ~prev; uint32_t combo = FM_BTN_R1 | FM_BTN_SQUARE;
                       if ((b & combo) == combo && (pressed & combo)) {
                           g_open = !g_open;
-                          if (g_open) {
-                              if (!fm_overlay_ready()) fm_show_notification_menu();
-                          } else {
-                              if (!fm_overlay_ready()) fm_notify("Menu cerrado");
-                          }
+                          if (!fm_overlay_ready()) fm_show_notification_menu();
                       } else if (g_open) {
-                          if (pressed & FM_BTN_UP) {
-                              g_sel = (g_sel + FM_NOPT - 1) % FM_NOPT;
-                              if (!fm_overlay_ready()) fm_show_notification_menu();
-                          } else if (pressed & FM_BTN_DOWN) {
-                              g_sel = (g_sel + 1) % FM_NOPT;
-                              if (!fm_overlay_ready()) fm_show_notification_menu();
-                          } else if (pressed & FM_BTN_CROSS) {
-                              g_state[g_sel] = !g_state[g_sel];
-                              if (!fm_overlay_ready()) fm_show_notification_menu();
-                          } else if (pressed & FM_BTN_CIRCLE) {
-                              g_open = 0;
-                              if (!fm_overlay_ready()) fm_notify("Menu cerrado");
-                          }
+                          if (pressed & FM_BTN_UP) { g_sel = (g_sel + FM_NOPT - 1) % FM_NOPT; if (!fm_overlay_ready()) fm_show_notification_menu(); }
+                          else if (pressed & FM_BTN_DOWN) { g_sel = (g_sel + 1) % FM_NOPT; if (!fm_overlay_ready()) fm_show_notification_menu(); }
+                          else if (pressed & FM_BTN_CROSS) { g_state[g_sel] = !g_state[g_sel]; if (!fm_overlay_ready()) fm_show_notification_menu(); }
+                          else if (pressed & FM_BTN_CIRCLE) { g_open = 0; if (!fm_overlay_ready()) fm_show_notification_menu(); }
                       }
                       prev = b;
                   }
@@ -408,11 +333,7 @@ jobs:
 
           static void fm_start_thread_once(const char *who) {
               fm_log(who);
-              if (!g_started) {
-                  g_started = 1;
-                  fm_notify("FortniteMenu v3 cargado");
-                  fm_thread_create(&g_thread, 0, fm_thread, 0, "FortniteMenu");
-              }
+              if (!g_started) { g_started = 1; fm_notify("FortniteMenu v3 cargado"); fm_thread_create(&g_thread, 0, fm_thread, 0, "FortniteMenu"); }
           }
 
           attr_public const char *g_pluginName = "FortniteMenu";
@@ -421,31 +342,16 @@ jobs:
           attr_public uint32_t g_pluginVersion = 0x00000100;
 
           attr_public int32_t plugin_load(int32_t argc, const char *argv[]) {
-              if (!g_hooked) {
-                  g_hooked = 1;
-                  HOOK32(sceVideoOutRegisterBuffers);
-                  HOOK32(sceVideoOutSubmitFlip);
-              }
+              if (!g_hooked) { g_hooked = 1; HOOK32(sceVideoOutRegisterBuffers); HOOK32(sceVideoOutSubmitFlip); }
               fm_start_thread_once("v3 plugin_load llamado");
               return 0;
           }
-
           attr_public int32_t plugin_unload(int32_t argc, const char *argv[]) {
-              UNHOOK(sceVideoOutRegisterBuffers);
-              UNHOOK(sceVideoOutSubmitFlip);
-              fm_log("v3 plugin_unload llamado");
-              return 0;
+              UNHOOK(sceVideoOutRegisterBuffers); UNHOOK(sceVideoOutSubmitFlip);
+              fm_log("v3 plugin_unload llamado"); return 0;
           }
-
-          attr_public int32_t module_start(size_t argc, const void *args) {
-              fm_start_thread_once("v3 module_start llamado");
-              return 0;
-          }
-
-          attr_public int32_t module_stop(size_t argc, const void *args) {
-              fm_log("v3 module_stop llamado");
-              return 0;
-          }
+          attr_public int32_t module_start(size_t argc, const void *args) { fm_start_thread_once("v3 module_start llamado"); return 0; }
+          attr_public int32_t module_stop(size_t argc, const void *args) { fm_log("v3 module_stop llamado"); return 0; }
           EOF
 
       - name: Compilar plugin
@@ -471,8 +377,13 @@ jobs:
           EOF2
 
           clang @cflags.rsp -o main.o main.c
+          
+          $OO/bin/ld.lld -m elf_x86_64 -pie --script $OO/linker.x \
+            -L$OO/lib -L$OO/lib/linux -o FortniteMenu.prx main.o \
+            -lc -lkernel -lSceSystemService -lSceVideoOut -lScePad -lSceUserService
 
-          find_lib() {
-            for d in "$OO/lib" "$SDK"; do
-              for e in so a; do
-        
+      - name: Subir PRX
+        uses: actions/upload-artifact@v4
+        with:
+          name: FortniteMenu
+          path: ${{ github.workspace }}/menu/FortniteMenu.prx
