@@ -20,14 +20,21 @@ jobs:
           tar xzf *.tar.gz
 
       - name: Imprimir lo que necesito ver
+        shell: bash {0}
         run: |
-          echo "=== fliprate_remover main.c ==="
-          cat plugin_src/fliprate_remover/source/main.c
-          echo "=== headers del SDK ==="
-          ls sdk/include
-          echo "=== GoldHEN.h (hooks) ==="
-          grep -n -i -E "hook|detour|dlsym" sdk/include/GoldHEN.h | head -60
-          echo "=== VideoOut.h ==="
-          VO=$(find /tmp/dl -name VideoOut.h | head -1)
-          echo "$VO"
-          grep -n -i -E "BufferAttribute|pixelFormat|tilingMode|RegisterBuffers|SubmitFlip|width|height|pitch" "$VO" | head -60
+          {
+            echo '```'
+            echo "=== fliprate_remover main.c ==="
+            cat plugin_src/fliprate_remover/source/main.c
+            echo "=== headers del SDK ==="
+            ls sdk/include
+            echo "=== GoldHEN.h (hooks) ==="
+            grep -n -i -E "hook|detour|dlsym" sdk/include/GoldHEN.h | head -60
+            echo "=== VideoOut.h ==="
+            VO=$(find /tmp/dl -name VideoOut.h | head -1)
+            echo "$VO"
+            grep -n -i -E "BufferAttribute|pixelFormat|tilingMode|RegisterBuffers|SubmitFlip|width|height|pitch" "$VO" | head -60
+            echo '```'
+          } > resultado.md 2>&1
+          cat resultado.md
+          cat resultado.md >> $GITHUB_STEP_SUMMARY
