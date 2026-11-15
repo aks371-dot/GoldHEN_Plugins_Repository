@@ -1,52 +1,21 @@
-name: Build modules
-on: [push, workflow_dispatch]
+#include <stdint.h>
 
-jobs:
-  build_prx:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+#ifndef attr_public
+#define attr_public __attribute__((visibility("default")))
+#endif
 
-      - name: Instalar clang, lld y llvm
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang lld llvm
-          which llvm-ar || sudo ln -s "$(ls /usr/bin/llvm-ar-* | head -1)" /usr/bin/llvm-ar
-          llvm-ar --version | head -1
+void printf_notification(const char *fmt, ...);
 
-      - name: Descargar OpenOrbis
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p /tmp/dl
-          cd /tmp/dl
-          gh release download -R OpenOrbis/OpenOrbis-PS4-Toolchain --pattern '*.tar.gz'
-          tar xzf *.tar.gz -C $GITHUB_WORKSPACE
-          ls $GITHUB_WORKSPACE/OpenOrbis/PS4Toolchain
+attr_public const char *g_pluginName = "FortniteMenu";
+attr_public const char *g_pluginDesc = "Menu de prueba";
+attr_public const char *g_pluginAuth = "FortniteMenu";
+attr_public uint32_t g_pluginVersion = 0x00000100;
 
-      - name: Descargar GoldHEN SDK
-        run: |
-          rm -rf $GITHUB_WORKSPACE/SDK
-          git clone --depth 1 https://github.com/GoldHEN/GoldHEN_Plugins_SDK.git $GITHUB_WORKSPACE/SDK
-          ls $GITHUB_WORKSPACE/SDK
+attr_public int32_t plugin_load(int32_t argc, const char *argv[]) {
+    printf_notification("FortniteMenu cargado");
+    return 0;
+}
 
-      - name: Dejar solo plugin_template
-        run: |
-          cd plugin_src
-          for d in */; do
-            if [ "$d" != "plugin_template/" ]; then rm -rf "$d"; fi
-          done
-          ls
-
-      - name: Compilar
-        run: |
-          export OO_PS4_TOOLCHAIN=$GITHUB_WORKSPACE/OpenOrbis/PS4Toolchain
-          export GOLDHEN_SDK=$GITHUB_WORKSPACE/SDK
-          chmod +x $OO_PS4_TOOLCHAIN/bin/linux/create-fself
-          make
-
-      - name: Subir plugins
-        uses: actions/upload-artifact@v4
-        with:
-          name: plugins
-          path: bin/plugins/prx_final/
+attr_public int32_t plugin_unload(int32_t argc, const char *argv[]) {
+    return 0;
+}
