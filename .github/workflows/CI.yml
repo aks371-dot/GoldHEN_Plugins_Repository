@@ -1,9 +1,6 @@
 name: Build modules
 on: [push, workflow_dispatch]
 
-permissions:
-  contents: write
-
 jobs:
   build_prx:
     runs-on: ubuntu-latest
@@ -90,6 +87,7 @@ jobs:
               return 0;
           }
           EOF
+          cat plugin_src/plugin_template/source/main.c
 
       - name: Compilar
         run: |
@@ -98,19 +96,8 @@ jobs:
           chmod +x $OO_PS4_TOOLCHAIN/bin/linux/create-fself
           make
 
-      - name: Preparar archivos finales
-        run: |
-          mkdir -p out
-          cp bin/plugins/prx_final/plugin_template.prx out/FortniteMenu.prx
-          printf '[default]\n/data/GoldHEN/plugins/FortniteMenu.prx\n' > out/plugins.ini
-          ls -la out
-          cat out/plugins.ini
-
-      - name: Publicar Release con los archivos sueltos
-        uses: softprops/action-gh-release@v2
+      - name: Subir plugins
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: build-${{ github.run_number }}
-          name: FortniteMenu build ${{ github.run_number }}
-          files: |
-            out/FortniteMenu.prx
-            out/plugins.ini
+          name: plugins
+          path: bin/plugins/prx_final/
