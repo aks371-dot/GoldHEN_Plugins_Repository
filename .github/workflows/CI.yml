@@ -32,6 +32,19 @@ jobs:
           git clone --depth 1 https://github.com/GoldHEN/GoldHEN_Plugins_SDK.git $GOLDHEN_SDK
           make -C $GOLDHEN_SDK PRINTF=1 DEBUGFLAGS=1
 
+      - name: Imprimir SDK
+        run: |
+          echo "=== fliprate_remover ==="
+          cat plugin_src/fliprate_remover/source/main.c || echo "no existe fliprate_remover"
+          echo "=== include del SDK ==="
+          ls $GOLDHEN_SDK/include
+          echo "=== GoldHEN.h ==="
+          grep -n -i -E "hook|detour|dlsym" $GOLDHEN_SDK/include/GoldHEN.h | head -60 || true
+          echo "=== VideoOut.h ==="
+          VO=$(find $OO_PS4_TOOLCHAIN -name VideoOut.h | head -1)
+          echo "$VO"
+          grep -n -i -E "BufferAttribute|pixelFormat|tilingMode|RegisterBuffers|SubmitFlip|width|height|pitch" "$VO" | head -60 || true
+
       - name: Escribir main.c
         run: |
           mkdir -p $GITHUB_WORKSPACE/menu
