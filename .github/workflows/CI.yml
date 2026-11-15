@@ -39,12 +39,30 @@ jobs:
         run: |
           cat > plugin_src/plugin_template/source/main.c <<'EOF'
           #include <stdint.h>
+          #include <stddef.h>
 
           #ifndef attr_public
           #define attr_public __attribute__((visibility("default")))
           #endif
 
-          void printf_notification(const char *fmt, ...);
+          typedef struct {
+              char unk[45];
+              char msg[3075];
+          } notify_request_t;
+
+          int sceKernelSendNotificationRequest(int device, notify_request_t *req, size_t size, int blocking);
+
+          static notify_request_t g_req;
+
+          static void notify(const char *text) {
+              int i = 0;
+              while (text[i] && i < 3070) {
+                  g_req.msg[i] = text[i];
+                  i++;
+              }
+              g_req.msg[i] = 0;
+              sceKernelSendNotificationRequest(0, &g_req, sizeof(g_req), 0);
+          }
 
           attr_public const char *g_pluginName = "FortniteMenu";
           attr_public const char *g_pluginDesc = "Menu de prueba";
@@ -52,11 +70,20 @@ jobs:
           attr_public uint32_t g_pluginVersion = 0x00000100;
 
           attr_public int32_t plugin_load(int32_t argc, const char *argv[]) {
-              printf_notification("FortniteMenu cargado");
+              notify("FortniteMenu cargado");
               return 0;
           }
 
           attr_public int32_t plugin_unload(int32_t argc, const char *argv[]) {
+              return 0;
+          }
+
+          attr_public int32_t module_start(size_t argc, const void *args) {
+              notify("FortniteMenu cargado");
+              return 0;
+          }
+
+          attr_public int32_t module_stop(size_t argc, const void *args) {
               return 0;
           }
           EOF
