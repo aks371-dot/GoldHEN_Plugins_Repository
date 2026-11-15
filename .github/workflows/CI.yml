@@ -38,7 +38,6 @@ jobs:
           cat > $GITHUB_WORKSPACE/menu/main.c <<'EOF'
           #include <Common.h>
           #include <orbis/VideoOut.h>
-          #include "plugin_common.h"
           #include <stdint.h>
           #include <stddef.h>
 
@@ -448,15 +447,17 @@ jobs:
 
       - name: Compilar plugin
         run: |
-          cd $GITHUB_WORKSPACE/menu
+          set -e
+          OO="$GITHUB_WORKSPACE/OpenOrbis/PS4Toolchain"
+          SDK="$GITHUB_WORKSPACE/SDK"
+          cd "$GITHUB_WORKSPACE/menu"
 
-          clang -D__FINAL__=1 --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c \
-            -D__USE_PRINTF__ -Wall \
-            -isysroot $OO_PS4_TOOLCHAIN -isystem $OO_PS4_TOOLCHAIN/include \
-            -I$GOLDHEN_SDK/include -I$GITHUB_WORKSPACE/common \
-            -o main.o main.c
+          echo "OO=$OO"
+          echo "SDK=$SDK"
+          ls -la main.c
 
-          ld.lld $GOLDHEN_SDK/build/crtprx.o main.o -o FortniteMenu.elf \
-            -m elf_x86_64 -pie --script $OO_PS4_TOOLCHAIN/link.x -e _init --eh-frame-hdr \
-            -L$OO_PS4_TOOLCHAIN/lib -L$GOLDHEN_SDK \
-            -lSceLibcInternal -lSceVideoOut -lGoldHEN_Hook
+          CFLAGS=(-D__FINAL__=1 --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c -D__USE_PRINTF__ -Wall -isysroot "$OO" -isystem "$OO/include" -I"$SDK/include")
+          clang "${CFLAGS[@]}" -o main.o main.c
+
+          LFLAGS=(-m elf_x86_64 -pie --script "$OO/link.x" -e _init --eh-frame-hdr -L"$OO/lib" -L"$SDK" -lSceLibcInternal -lSceVideoOut -lGoldHEN_Hook -lkernel -lSceSysmodule -lScePad -lSceUserService)
+  
