@@ -1,6 +1,9 @@
 name: Build modules
 on: [push, workflow_dispatch]
 
+permissions:
+  contents: write
+
 jobs:
   build_prx:
     runs-on: ubuntu-latest
@@ -452,12 +455,8 @@ jobs:
           SDK="$GITHUB_WORKSPACE/SDK"
           cd "$GITHUB_WORKSPACE/menu"
 
-          echo "OO=$OO"
-          echo "SDK=$SDK"
-          ls -la main.c
-
           CFLAGS=(-D__FINAL__=1 --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c -D__USE_PRINTF__ -Wall -isysroot "$OO" -isystem "$OO/include" -I"$SDK/include")
           clang "${CFLAGS[@]}" -o main.o main.c
 
           LFLAGS=(-m elf_x86_64 -pie --script "$OO/link.x" -e _init --eh-frame-hdr -L"$OO/lib" -L"$SDK" -lSceLibcInternal -lSceVideoOut -lGoldHEN_Hook -lkernel -lSceSysmodule -lScePad -lSceUserService)
-  
+          ld.lld "$SDK/build/crtprx.o" main.o
