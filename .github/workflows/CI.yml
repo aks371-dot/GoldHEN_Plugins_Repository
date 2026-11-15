@@ -6,8 +6,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Instalar clang, lld y llvm
         run: |
@@ -31,6 +29,14 @@ jobs:
           rm -rf $GITHUB_WORKSPACE/SDK
           git clone --depth 1 https://github.com/GoldHEN/GoldHEN_Plugins_SDK.git $GITHUB_WORKSPACE/SDK
           ls $GITHUB_WORKSPACE/SDK
+
+      - name: Dejar solo plugin_template
+        run: |
+          cd plugin_src
+          for d in */; do
+            if [ "$d" != "plugin_template/" ]; then rm -rf "$d"; fi
+          done
+          ls
 
       - name: Compilar
         run: |
