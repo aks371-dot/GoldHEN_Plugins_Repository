@@ -1,17 +1,36 @@
-#include <stdint.h>
-#include "plugin_common.h"
-#include <GoldHEN.h>
+name: Build modules
+on: [push, workflow_dispatch]
 
-attr_public const char *g_pluginName = "FortniteMenu";
-attr_public const char *g_pluginDesc = "Menu de prueba";
-attr_public const char *g_pluginAuth = "FortniteMenu";
-attr_public uint32_t g_pluginVersion = 0x00000100;
+jobs:
+  build_prx:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-int32_t attr_public plugin_load(int32_t argc, const char *argv[]) {
-    printf_notification("FortniteMenu cargado");
-    return 0;
-}
+      - name: Instalar clang y lld
+        run: sudo apt-get update && sudo apt-get install -y clang lld
 
-int32_t attr_public plugin_unload(int32_t argc, const char *argv[]) {
-    return 0;
-}
+      - name: Descargar OpenOrbis
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/dl
+          cd /tmp/dl
+          gh release download -R OpenOrbis/OpenOrbis-PS4-Toolchain --pattern '*.tar.gz'
+          tar xzf *.tar.gz -C $GITHUB_WORKSPACE
+          ls $GITHUB_WORKSPACE/OpenOrbis/PS4Toolchain
+
+      - name: Compilar
+        run: |
+          export OO_PS4_TOOLCHAIN=$GITHUB_WORKSPACE/OpenOrbis/PS4Toolchain
+          export GOLDHEN_SDK=$GITHUB_WORKSPACE/SDK
+          chmod +x $OO_PS4_TOOLCHAIN/bin/linux/create-fself
+          make
+
+      - name: Subir plugins
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugins
+          path: bin/plugins/prx_final/
